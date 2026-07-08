@@ -1,310 +1,202 @@
 """
-job_adapter.py — Adaptation du CV et génération de lettre de motivation
-Utilise Ollama (local, gratuit) ou Groq (API cloud gratuite)
+job_adapter.py — Adaptation IA du CV et génération de lettre de motivation
+via l'API Anthropic (Claude)
 """
 
-import json
-import re
-from openai import OpenAI
-from typing import Generator
+import anthropic
 
 
-# ─── Prompts système ────────────────────────────────────────────────────────
-
-SYSTEM_PROMPT_CV = """Tu es un expert en recrutement et en rédaction de CV professionnels.
-Ton rôle est d'adapter un CV existant pour maximiser les chances du candidat face à une offre d'emploi spécifique.
-
-Règles importantes :
-- Ne jamais inventer d'expériences ou de compétences absentes du CV original.
-- Réorganiser, reformuler et mettre en valeur les éléments déjà présents.
-- Adapter le vocabulaire aux termes de l'offre (mots-clés du secteur, technologies mentionnées).
-- Mettre en avant les expériences les plus pertinentes en premier.
-- Conserver toutes les informations de contact et les faits objectifs (dates, diplômes, entreprises).
-- Rendre le CV concis, professionnel et percutant.
-- Utiliser une mise en forme claire avec des sections bien délimitées (### pour les titres).
-- Répondre UNIQUEMENT avec le CV adapté, sans commentaires ni explications."""
-
-SYSTEM_PROMPT_LETTRE = """Tu es un expert en recrutement et en rédaction de lettres de motivation.
-Ton rôle est de rédiger une lettre de motivation percutante, personnalisée et professionnelle.
-
-Règles importantes :
-- La lettre doit être directement liée à l'offre d'emploi fournie.
-- Mettre en valeur les compétences du candidat qui correspondent aux besoins de l'entreprise.
-- Adopter un ton professionnel mais chaleureux, montrant la motivation réelle du candidat.
-- Structure : accroche → présentation → adéquation profil/poste → motivation → conclusion avec appel à l'action.
-- Longueur : 3 à 4 paragraphes (environ 300-400 mots).
-- Ne pas répéter bêtement le CV, mais raconter une histoire cohérente.
-- Personnaliser selon l'entreprise et le secteur si des informations sont disponibles dans l'offre.
-- Répondre UNIQUEMENT avec la lettre, sans commentaires ni explications."""
-
-
-# ─── Clients IA ─────────────────────────────────────────────────────────────
-
-def get_ollama_client(base_url: str = "http://localhost:11434/v1") -> OpenAI:
-    """Retourne un client OpenAI pointant vers Ollama local."""
-    return OpenAI(base_url=base_url, api_key="ollama")
-
-
-def get_groq_client(api_key: str) -> OpenAI:
-    """Retourne un client OpenAI pointant vers l'API Groq."""
-    return OpenAI(base_url="https://api.groq.com/openai/v1", api_key=api_key)
-
-
-def get_client(provider: str, api_key: str = "", ollama_url: str = "http://localhost:11434/v1") -> OpenAI:
-    if provider == "ollama":
-        return get_ollama_client(ollama_url)
-    elif provider == "groq":
-        return get_groq_client(api_key)
-    else:
-        raise ValueError(f"Fournisseur inconnu : {provider}")
-
-
-# ─── Adaptation du CV (streaming) ────────────────────────────────────────────
-
-def adapt_cv_streamed(
+def adapt_cv(
     cv_content: str,
     job_posting: str,
-    job_sector: str,
-    provider: str,
-    model: str,
-    api_key: str = "",
-    ollama_url: str = "http://localhost:11434/v1",
-) -> Generator[str, None, None]:
+    sector: str,
+    api_key: str,
+    model: str = "claude-sonnet-4-6",
+) -> str:
     """
-    Adapte le CV à l'offre d'emploi. Génère le texte en streaming.
+    Adapte le CV de l'utilisateur en fonction de l'offre d'emploi.
+    Retourne le CV adapté sous forme de texte formaté (Markdown-like).
     """
-    client = get_client(provider, api_key, ollama_url)
+    client = anthropic.Anthropic(api_key=api_key)
 
-    user_message = (
-        f"Voici le CV du candidat :\n\n---\n{cv_content}\n---\n\n"
-        f"Voici l'offre d'emploi (secteur : {job_sector or 'non specifie'}) :\n\n---\n{job_posting}\n---\n\n"
-        "Adapte ce CV pour maximiser les chances du candidat face a cette offre. "
-        "Conserve toutes les informations reelles et restructure/reformule pour mettre en valeur "
-        "les elements les plus pertinents."
-    )
+    system_prompt = """Tu es un expert en recrutement et en rédaction de CV professionnels.
+Tu aides les candidats à adapter leur CV pour maximiser leurs chances d'obtenir un entretien.
+Tu dois :
+- Conserver toutes les informations factuelles (expériences, diplômes, compétences réelles)
+- Réorganiser et reformuler pour mettre en valeur ce qui est le plus pertinent pour le poste
+- Utiliser les mots-clés de l'offre d'emploi
+- Adopter un ton professionnel et concis
+- Structurer clairement avec des sections bien définies
+- Répondre en français
+- Utiliser des marqueurs simples : # pour le nom/titre, ## pour les sections, ** pour les éléments importants"""
 
-    stream = client.chat.completions.create(
+    user_prompt = f"""Voici mon CV actuel :
+
+{cv_content}
+
+---
+
+Voici l'offre d'emploi à laquelle je postule (secteur : {sector}) :
+
+{job_posting}
+
+---
+
+Adapte mon CV pour cette offre spécifique.
+- Garde toutes mes informations réelles (ne rien inventer)
+- Réorganise et reformule pour coller au maximum aux exigences du poste
+- Mets en avant les compétences et expériences les plus pertinentes
+- Utilise les termes et mots-clés de l'offre
+- Structure avec des sections claires : Profil, Expériences, Compétences, Formation, etc.
+
+Retourne uniquement le CV adapté, sans commentaires."""
+
+    message = client.messages.create(
         model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT_CV},
-            {"role": "user", "content": user_message},
-        ],
         max_tokens=4096,
-        stream=True,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_prompt}],
     )
 
-    for chunk in stream:
-        delta = chunk.choices[0].delta
-        if delta and delta.content:
-            yield delta.content
+    return message.content[0].text
 
 
-# ─── Génération de la lettre (streaming) ─────────────────────────────────────
-
-def generate_cover_letter_streamed(
+def adapt_cv_stream(
     cv_content: str,
     job_posting: str,
-    job_sector: str,
-    provider: str,
-    model: str,
-    api_key: str = "",
-    ollama_url: str = "http://localhost:11434/v1",
-) -> Generator[str, None, None]:
+    sector: str,
+    api_key: str,
+    model: str = "claude-sonnet-4-6",
+):
     """
-    Génère une lettre de motivation personnalisée. Texte en streaming.
+    Version streaming — retourne un générateur de chunks de texte.
+    À utiliser avec st.write_stream() de Streamlit.
     """
-    client = get_client(provider, api_key, ollama_url)
+    client = anthropic.Anthropic(api_key=api_key)
 
-    user_message = (
-        f"Voici le profil du candidat (extrait de son CV) :\n\n---\n{cv_content}\n---\n\n"
-        f"Voici l'offre d'emploi (secteur : {job_sector or 'non specifie'}) :\n\n---\n{job_posting}\n---\n\n"
-        "Redige une lettre de motivation professionnelle, personnalisee et convaincante pour cette offre."
-    )
+    system_prompt = """Tu es un expert en recrutement et en rédaction de CV professionnels.
+Tu aides les candidats à adapter leur CV pour maximiser leurs chances d'obtenir un entretien.
+Tu dois :
+- Conserver toutes les informations factuelles (expériences, diplômes, compétences réelles)
+- Réorganiser et reformuler pour mettre en valeur ce qui est le plus pertinent pour le poste
+- Utiliser les mots-clés de l'offre d'emploi
+- Adopter un ton professionnel et concis
+- Structurer clairement avec des sections bien définies
+- Répondre en français
+- Utiliser des marqueurs simples : # pour le nom/titre, ## pour les sections, ** pour les éléments importants"""
 
-    stream = client.chat.completions.create(
+    user_prompt = f"""Voici mon CV actuel :
+
+{cv_content}
+
+---
+
+Voici l'offre d'emploi à laquelle je postule (secteur : {sector}) :
+
+{job_posting}
+
+---
+
+Adapte mon CV pour cette offre spécifique.
+- Garde toutes mes informations réelles (ne rien inventer)
+- Réorganise et reformule pour coller au maximum aux exigences du poste
+- Mets en avant les compétences et expériences les plus pertinentes
+- Utilise les termes et mots-clés de l'offre
+- Structure avec des sections claires : Profil, Expériences, Compétences, Formation, etc.
+
+Retourne uniquement le CV adapté, sans commentaires."""
+
+    with client.messages.stream(
         model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT_LETTRE},
-            {"role": "user", "content": user_message},
-        ],
-        max_tokens=2048,
-        stream=True,
-    )
-
-    for chunk in stream:
-        delta = chunk.choices[0].delta
-        if delta and delta.content:
-            yield delta.content
-
-
-SYSTEM_PROMPT_CANVA_GUIDE = """Tu es un expert en recrutement et optimisation de CV.
-Tu vas recevoir un CV et une offre d'emploi.
-
-Ta mission : produire un guide clair et actionnable listant les modifications precises a apporter au CV pour le cibler sur cette offre.
-
-Format de reponse (Markdown) :
-- Organise les modifications par section du CV (Accroche, Competences, Experiences, Formation, etc.)
-- Pour chaque modification, indique clairement :
-  - [AVANT] le texte actuel (ou une description de ce qui est present)
-  - [APRES] le nouveau texte suggere
-  - Ou : "Ajouter : ..." / "Supprimer : ..." / "Reformuler : ..."
-- Sois tres specifique et actionnable — la personne doit pouvoir faire les modifications directement dans Canva
-- Mets en gras les mots-cles importants de l'offre a integrer
-- Ne modifie pas les informations factuelles (nom, dates, entreprises, diplomes reels)
-- Maximum 20 modifications, en ordre de priorite (les plus importantes en premier)
-
-Commence directement par les modifications, sans introduction."""
-
-
-def generate_canva_guide_streamed(
-    cv_content: str,
-    job_posting: str,
-    job_sector: str,
-    provider: str,
-    model: str,
-    api_key: str = "",
-    ollama_url: str = "http://localhost:11434/v1",
-) -> Generator[str, None, None]:
-    """
-    Génère un guide de modifications Canva pour adapter le CV à l'offre.
-    """
-    client = get_client(provider, api_key, ollama_url)
-
-    user_message = (
-        f"Voici mon CV actuel :\n\n---\n{cv_content}\n---\n\n"
-        f"Voici l'offre d'emploi (secteur : {job_sector or 'non specifie'}) :\n\n---\n{job_posting}\n---\n\n"
-        "Produis le guide des modifications a apporter a mon CV pour maximiser mes chances sur cette offre."
-    )
-
-    stream = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT_CANVA_GUIDE},
-            {"role": "user", "content": user_message},
-        ],
-        max_tokens=2048,
-        stream=True,
-    )
-
-    for chunk in stream:
-        delta = chunk.choices[0].delta
-        if delta and delta.content:
-            yield delta.content
-
-
-SYSTEM_PROMPT_STRUCTURED = """Tu es un expert en rédaction de CV professionnels.
-Tu vas recevoir une liste de paragraphes numérotés extraits d'un CV, ainsi qu'une offre d'emploi.
-
-Ta mission :
-- Adapter UNIQUEMENT le contenu des descriptions de poste, competences, resume/accroche et realisations.
-- NE PAS modifier : les en-tetes de section, les noms d'entreprises, les dates, les noms de diplomes, les noms d'ecoles, les coordonnees.
-- Reformuler les descriptions pour mettre en avant les competences correspondant a l'offre.
-- Utiliser les mots-cles de l'offre dans les descriptions quand c'est pertinent.
-- Conserver exactement le meme niveau de detail (ne pas allonger ni raccourcir significativement).
-
-Reponds UNIQUEMENT avec un objet JSON valide de la forme :
-{"index": "nouveau texte adapte", "index2": "autre texte adapte"}
-Ou "index" est le numero du paragraphe entre crochets dans la liste fournie.
-N'inclure QUE les paragraphes que tu as modifies. Ne pas inclure les paragraphes inchanges.
-Ne pas ajouter de texte avant ou apres le JSON."""
-
-
-def adapt_cv_structured(
-    paragraphs_text: str,
-    job_posting: str,
-    job_sector: str,
-    provider: str,
-    model: str,
-    api_key: str = "",
-    ollama_url: str = "http://localhost:11434/v1",
-) -> dict[int, str]:
-    """
-    Adapte le CV paragraphe par paragraphe en preservant la structure.
-    Retourne {index_paragraphe: texte_adapte}.
-    """
-    client = get_client(provider, api_key, ollama_url)
-
-    user_message = (
-        f"Voici les paragraphes adaptables de mon CV (numerotes) :\n\n{paragraphs_text}\n\n"
-        f"Voici l'offre d'emploi (secteur : {job_sector or 'non specifie'}) :\n\n---\n{job_posting}\n---\n\n"
-        "Adapte uniquement les paragraphes pertinents. Retourne un JSON {\"index\": \"texte adapte\"}."
-    )
-
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT_STRUCTURED},
-            {"role": "user", "content": user_message},
-        ],
         max_tokens=4096,
-        stream=False,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_prompt}],
+    ) as stream:
+        for text in stream.text_stream:
+            yield text
+
+
+def generate_cover_letter_stream(
+    cv_content: str,
+    job_posting: str,
+    sector: str,
+    company_name: str,
+    applicant_name: str,
+    api_key: str,
+    model: str = "claude-sonnet-4-6",
+):
+    """
+    Génère une lettre de motivation personnalisée en streaming.
+    """
+    client = anthropic.Anthropic(api_key=api_key)
+
+    system_prompt = """Tu es un expert en recrutement et en rédaction de lettres de motivation.
+Tu rédiges des lettres percutantes, personnalisées et professionnelles en français.
+La lettre doit :
+- Être structurée classiquement (introduction accrochante, développement, conclusion avec appel à l'action)
+- Montrer une vraie connaissance du poste et de l'entreprise
+- Mettre en lien les compétences du candidat avec les besoins du poste
+- Avoir un ton chaleureux mais professionnel
+- Faire environ 3-4 paragraphes (300-400 mots)
+- Ne pas répéter mot pour mot le CV mais le compléter"""
+
+    company_info = f" chez {company_name}" if company_name else ""
+    name_info = f"Le candidat s'appelle {applicant_name}." if applicant_name else "Le nom du candidat n'est pas précisé (utilise [Votre Prénom Nom])."
+
+    user_prompt = f"""Voici le CV du candidat :
+
+{cv_content}
+
+---
+
+Voici l'offre d'emploi{company_info} (secteur : {sector}) :
+
+{job_posting}
+
+---
+
+{name_info}
+
+Rédige une lettre de motivation personnalisée et percutante pour ce poste.
+- Accroche originale liée au poste ou à l'entreprise
+- Montre pourquoi ce poste est fait pour ce candidat
+- Cite 2-3 réalisations/compétences clés du CV en lien direct avec l'offre
+- Conclusion avec appel à l'entretien
+- Format lettre formelle avec date, objet, formule de politesse"""
+
+    with client.messages.stream(
+        model=model,
+        max_tokens=2048,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_prompt}],
+    ) as stream:
+        for text in stream.text_stream:
+            yield text
+
+
+def generate_cover_letter(
+    cv_content: str,
+    job_posting: str,
+    sector: str,
+    company_name: str,
+    applicant_name: str,
+    api_key: str,
+    model: str = "claude-sonnet-4-6",
+) -> str:
+    """Version non-streaming de la génération de lettre de motivation."""
+    client = anthropic.Anthropic(api_key=api_key)
+
+    company_info = f" chez {company_name}" if company_name else ""
+    name_info = f"Le candidat s'appelle {applicant_name}." if applicant_name else "Le nom du candidat n'est pas précisé (utilise [Votre Prénom Nom])."
+
+    message = client.messages.create(
+        model=model,
+        max_tokens=2048,
+        messages=[
+            {
+                "role": "user",
+                "content": f"""CV :\n{cv_content}\n\nOffre{company_info} ({sector}) :\n{job_posting}\n\n{name_info}\n\nRédige une lettre de motivation professionnelle et personnalisée.""",
+            }
+        ],
     )
-
-    raw = response.choices[0].message.content or "{}"
-
-    # Extraire le JSON de la reponse (parfois entouré de ```json ... ```)
-    json_match = re.search(r"\{[\s\S]*\}", raw)
-    if not json_match:
-        return {}
-    try:
-        parsed = json.loads(json_match.group())
-        return {int(k): v for k, v in parsed.items() if str(k).isdigit()}
-    except (json.JSONDecodeError, ValueError):
-        return {}
-
-
-# ─── Vérification de connexion ────────────────────────────────────────────────
-
-def check_ollama(base_url: str = "http://localhost:11434") -> tuple[bool, list[str]]:
-    """
-    Vérifie si Ollama est en cours d'exécution et retourne la liste des modèles disponibles.
-    """
-    import requests
-    try:
-        resp = requests.get(f"{base_url}/api/tags", timeout=3)
-        if resp.status_code == 200:
-            data = resp.json()
-            models = [m["name"] for m in data.get("models", [])]
-            return True, models
-        return False, []
-    except Exception:
-        return False, []
-
-
-def check_groq(api_key: str) -> tuple[bool, str]:
-    """
-    Vérifie si la clé Groq est valide.
-    """
-    try:
-        client = get_groq_client(api_key)
-        client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[{"role": "user", "content": "ok"}],
-            max_tokens=5,
-        )
-        return True, ""
-    except Exception as e:
-        err = str(e)
-        if "401" in err or "auth" in err.lower():
-            return False, "Cle API invalide. Verifiez sur console.groq.com"
-        return False, f"Erreur : {err}"
-
-
-# ─── Modèles recommandés ──────────────────────────────────────────────────────
-
-GROQ_MODELS = [
-    "llama-3.3-70b-versatile",   # Meilleur qualite
-    "llama-3.1-70b-versatile",
-    "llama-3.1-8b-instant",      # Le plus rapide
-    "mixtral-8x7b-32768",
-    "gemma2-9b-it",
-]
-
-OLLAMA_RECOMMENDED = [
-    "llama3.2",
-    "llama3.1",
-    "mistral",
-    "gemma2",
-    "qwen2.5",
-    "phi3",
-]
+    return message.content[0].text
