@@ -1,0 +1,23 @@
+# AutoCandidature — Dépendances Python
+# Installez avec : pip install -r requirements.txt
+
+# Interface web
+streamlit>=1.35.0
+
+# Client IA (compatible Ollama local + Groq cloud gratuit)
+openai>=1.30.0
+
+# Requêtes HTTP (géocodage, France Travail API, vérification Ollama)
+requests>=2.31.0
+
+# Lecture de fichiers PDF
+pdfplumber>=0.11.0
+
+# Lecture / écriture de fichiers DOCX (Word)
+python-docx>=1.1.0
+
+# Recherche d'offres sur Indeed + LinkedIn (sans compte)
+python-jobspy>=1.1.0
+
+# Conversion DOCX → PDF (utilise Word sur macOS/Windows si disponible)
+docx2pdf>=0.1.8
