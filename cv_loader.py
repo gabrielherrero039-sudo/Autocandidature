@@ -1,134 +1,160 @@
 """
-cv_loader.py — Chargement du CV depuis un fichier PDF ou DOCX
+cv_loader.py — Lecture de CV (PDF, DOCX, TXT) et export DOCX
 """
 
-import io
-from typing import Optional
+import os
+from pathlib import Path
 
 
-def load_cv_from_pdf(file_bytes: bytes) -> str:
-    """Extrait le texte d'un fichier PDF."""
+def load_cv(file_path: str = None, uploaded_file=None) -> str:
+    """
+    Charge le contenu d'un CV depuis un fichier local ou un fichier uploadé Streamlit.
+    Supporte les formats : PDF, DOCX, TXT
+    """
+    if uploaded_file is not None:
+        return _load_from_upload(uploaded_file)
+    if file_path:
+        return _load_from_path(file_path)
+    raise ValueError("Fournissez soit un chemin de fichier soit un fichier uploadé.")
+
+
+def _load_from_upload(uploaded_file) -> str:
+    """Charge depuis un UploadedFile Streamlit."""
+    name = uploaded_file.name.lower()
+    data = uploaded_file.read()
+
+    if name.endswith(".pdf"):
+        return _extract_pdf_bytes(data)
+    elif name.endswith(".docx"):
+        return _extract_docx_bytes(data)
+    elif name.endswith(".txt") or name.endswith(".md"):
+        return data.decode("utf-8", errors="ignore")
+    else:
+        # Tente de décoder en texte brut
+        return data.decode("utf-8", errors="ignore")
+
+
+def _load_from_path(file_path: str) -> str:
+    """Charge depuis un chemin local."""
+    path = Path(file_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Fichier introuvable : {file_path}")
+
+    ext = path.suffix.lower()
+    if ext == ".pdf":
+        with open(path, "rb") as f:
+            return _extract_pdf_bytes(f.read())
+    elif ext == ".docx":
+        with open(path, "rb") as f:
+            return _extract_docx_bytes(f.read())
+    elif ext in (".txt", ".md"):
+        return path.read_text(encoding="utf-8", errors="ignore")
+    else:
+        return path.read_text(encoding="utf-8", errors="ignore")
+
+
+def _extract_pdf_bytes(data: bytes) -> str:
+    """Extrait le texte d'un PDF (bytes)."""
     try:
         import pdfplumber
+        import io
         text_parts = []
-        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
             for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text_parts.append(page_text)
+                t = page.extract_text()
+                if t:
+                    text_parts.append(t)
         return "\n\n".join(text_parts)
     except ImportError:
-        raise ImportError("pdfplumber n'est pas installé. Lancez : pip install pdfplumber")
-    except Exception as e:
-        raise ValueError(f"Impossible de lire le PDF : {e}")
+        pass
 
-
-def load_cv_from_docx(file_bytes: bytes) -> str:
-    """Extrait le texte d'un fichier DOCX."""
     try:
-        from docx import Document
-        doc = Document(io.BytesIO(file_bytes))
-        paragraphs = []
-        for para in doc.paragraphs:
-            if para.text.strip():
-                paragraphs.append(para.text)
-        # Extraire également les tableaux (souvent utilisés dans les CV)
-        for table in doc.tables:
-            for row in table.rows:
-                row_texts = [cell.text.strip() for cell in row.cells if cell.text.strip()]
-                if row_texts:
-                    paragraphs.append(" | ".join(row_texts))
-        return "\n".join(paragraphs)
+        import PyPDF2
+        import io
+        reader = PyPDF2.PdfReader(io.BytesIO(data))
+        text_parts = []
+        for page in reader.pages:
+            t = page.extract_text()
+            if t:
+                text_parts.append(t)
+        return "\n\n".join(text_parts)
     except ImportError:
-        raise ImportError("python-docx n'est pas installé. Lancez : pip install python-docx")
-    except Exception as e:
-        raise ValueError(f"Impossible de lire le DOCX : {e}")
+        raise ImportError("Installez pdfplumber ou PyPDF2 : pip install pdfplumber")
 
 
-def load_cv_from_txt(file_bytes: bytes) -> str:
-    """Extrait le texte d'un fichier TXT."""
+def _extract_docx_bytes(data: bytes) -> str:
+    """Extrait le texte d'un DOCX (bytes)."""
     try:
-        return file_bytes.decode("utf-8")
-    except UnicodeDecodeError:
-        return file_bytes.decode("latin-1")
+        import docx
+        import io
+        doc = docx.Document(io.BytesIO(data))
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        return "\n\n".join(paragraphs)
+    except ImportError:
+        raise ImportError("Installez python-docx : pip install python-docx")
 
 
-def load_cv(file_bytes: bytes, filename: str) -> str:
+def export_to_docx(content: str, filename: str = "document.docx") -> bytes:
     """
-    Charge le contenu d'un CV à partir de ses bytes et de son nom de fichier.
-    Supporte : PDF, DOCX, DOC, TXT
+    Convertit du texte en fichier DOCX et retourne les bytes.
+    Le texte peut utiliser des marqueurs Markdown simples (## pour titres, ** pour gras).
     """
-    filename_lower = filename.lower()
+    try:
+        import docx
+        from docx.shared import Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        import io
 
-    if filename_lower.endswith(".pdf"):
-        return load_cv_from_pdf(file_bytes)
-    elif filename_lower.endswith(".docx"):
-        return load_cv_from_docx(file_bytes)
-    elif filename_lower.endswith(".doc"):
-        # Tentative de lecture comme DOCX, sinon comme texte brut
-        try:
-            return load_cv_from_docx(file_bytes)
-        except Exception:
-            return load_cv_from_txt(file_bytes)
-    elif filename_lower.endswith(".txt"):
-        return load_cv_from_txt(file_bytes)
-    else:
-        raise ValueError(f"Format de fichier non supporté : {filename}. Utilisez PDF, DOCX, DOC ou TXT.")
+        doc = docx.Document()
+
+        # Style général
+        style = doc.styles["Normal"]
+        style.font.name = "Calibri"
+        style.font.size = Pt(11)
+
+        lines = content.split("\n")
+        for line in lines:
+            line_stripped = line.strip()
+
+            if line_stripped.startswith("## "):
+                # Titre de niveau 2
+                heading = doc.add_heading(line_stripped[3:], level=2)
+                heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            elif line_stripped.startswith("# "):
+                # Titre principal
+                heading = doc.add_heading(line_stripped[2:], level=1)
+                heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            elif line_stripped.startswith("**") and line_stripped.endswith("**"):
+                # Texte en gras
+                p = doc.add_paragraph()
+                run = p.add_run(line_stripped[2:-2])
+                run.bold = True
+            elif line_stripped == "---" or line_stripped == "___":
+                # Séparateur
+                doc.add_paragraph("─" * 60)
+            elif line_stripped == "":
+                doc.add_paragraph("")
+            else:
+                # Paragraphe normal, gestion du gras inline
+                p = doc.add_paragraph()
+                _add_formatted_run(p, line_stripped)
+
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+        return buffer.getvalue()
+
+    except ImportError:
+        raise ImportError("Installez python-docx : pip install python-docx")
 
 
-def generate_docx_from_text(title: str, content: str) -> bytes:
-    """
-    Génère un fichier DOCX à partir d'un titre et d'un texte.
-    Retourne les bytes du fichier DOCX.
-    """
-    from docx import Document
-    from docx.shared import Pt, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-
-    doc = Document()
-
-    # Style de base
-    style = doc.styles['Normal']
-    style.font.name = 'Calibri'
-    style.font.size = Pt(11)
-
-    # Titre
-    heading = doc.add_heading(title, level=1)
-    heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    for run in heading.runs:
-        run.font.color.rgb = RGBColor(0x2E, 0x4A, 0x7A)
-
-    doc.add_paragraph()  # Espace
-
-    # Contenu : on split sur les lignes vides pour créer des paragraphes
-    sections = content.split("\n\n")
-    for section in sections:
-        lines = section.strip().split("\n")
-        if not lines:
-            continue
-
-        first_line = lines[0].strip()
-
-        # Détection des titres de section (ligne courte en majuscules ou avec ###)
-        if (first_line.startswith("###") or
-                first_line.startswith("##") or
-                (len(first_line) < 60 and first_line.isupper()) or
-                first_line.endswith(":")):
-            clean_title = first_line.lstrip("#").strip().rstrip(":")
-            h = doc.add_heading(clean_title, level=2)
-            for run in h.runs:
-                run.font.color.rgb = RGBColor(0x2E, 0x4A, 0x7A)
-            # Reste de la section
-            rest = "\n".join(lines[1:]).strip()
-            if rest:
-                para = doc.add_paragraph(rest)
-                para.paragraph_format.space_after = Pt(6)
+def _add_formatted_run(paragraph, text: str):
+    """Ajoute du texte avec formatage gras inline (**...**)."""
+    import re
+    parts = re.split(r"(\*\*[^*]+\*\*)", text)
+    for part in parts:
+        if part.startswith("**") and part.endswith("**"):
+            run = paragraph.add_run(part[2:-2])
+            run.bold = True
         else:
-            full_text = "\n".join(lines).strip()
-            para = doc.add_paragraph(full_text)
-            para.paragraph_format.space_after = Pt(6)
-
-    # Sauvegarde en mémoire
-    buffer = io.BytesIO()
-    doc.save(buffer)
-    return buffer.getvalue()
+            paragraph.add_run(part)
