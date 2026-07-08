@@ -4,8 +4,15 @@ Adapte votre CV et génère une lettre de motivation pour chaque offre d'emploi.
 """
 
 import streamlit as st
-from cv_loader import load_cv, export_to_docx
+from cv_loader import load_cv
 from job_adapter import adapt_cv_stream, generate_cover_letter_stream
+
+# Export DOCX optionnel — fonctionne si python-docx est installé
+try:
+    from cv_loader import export_to_docx
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
 
 # ─── Configuration de la page ─────────────────────────────────────────────────
 
@@ -251,17 +258,18 @@ if generate_btn:
         cover_letter = st.session_state.cover_letter
 
         with dl_col1:
-            try:
-                cv_docx = export_to_docx(adapted_cv, "cv_adapte.docx")
-                st.download_button(
-                    label="📥 CV adapté (.docx)",
-                    data=cv_docx,
-                    file_name="cv_adapte.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
-                )
-            except Exception as e:
-                st.warning(f"Export DOCX indisponible : {e}")
+            if DOCX_AVAILABLE:
+                try:
+                    cv_docx = export_to_docx(adapted_cv, "cv_adapte.docx")
+                    st.download_button(
+                        label="📥 CV adapté (.docx)",
+                        data=cv_docx,
+                        file_name="cv_adapte.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                    )
+                except Exception as e:
+                    st.warning(f"Export DOCX indisponible : {e}")
 
         with dl_col2:
             st.download_button(
@@ -273,17 +281,18 @@ if generate_btn:
             )
 
         with dl_col3:
-            try:
-                letter_docx = export_to_docx(cover_letter, "lettre_motivation.docx")
-                st.download_button(
-                    label="📥 Lettre (.docx)",
-                    data=letter_docx,
-                    file_name="lettre_motivation.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
-                )
-            except Exception as e:
-                st.warning(f"Export DOCX indisponible : {e}")
+            if DOCX_AVAILABLE:
+                try:
+                    letter_docx = export_to_docx(cover_letter, "lettre_motivation.docx")
+                    st.download_button(
+                        label="📥 Lettre (.docx)",
+                        data=letter_docx,
+                        file_name="lettre_motivation.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                    )
+                except Exception as e:
+                    st.warning(f"Export DOCX indisponible : {e}")
 
         with dl_col4:
             st.download_button(
